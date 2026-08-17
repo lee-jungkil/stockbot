@@ -2994,12 +2994,17 @@ async function executeEntry(candidate) {
         const data = await res.json();
         if (data.serverBlocked) { addLog('warn', `⚠️ 미국 매수 서버 차단: ${candidate.ticker}`); return; }
         if (!data.ok) {
+          const errMsg = data.error || JSON.stringify(data);
           const detail = data.trId ? ` [trId:${data.trId} excd:${data.exchCd} hhmm:${data.hhmm}]` : '';
-          throw new Error((data.error || JSON.stringify(data)) + detail);
+          // "주문수량이 가능수량보다 큽니다" = 잔고 부족 → 친절한 메시지로 개선 (포지션 추가 안 함 — throw 유지)
+          if (errMsg.includes('가능수량') || errMsg.includes('주문수량')) {
+            throw new Error(`❌ 미국 매수 거부 — 잔고 부족 (주문수량 > 가능수량). 투자금액 설정을 낮추거나 잔고를 확인하세요${detail}`);
+          }
+          throw new Error(errMsg + detail);
         }
         // ✅ ordNo 로깅 — 실제 주문번호 확인용 (없어도 rt_cd=0이면 접수된 것으로 처리)
         addLog('info', `📥 미국 매수접수: ${candidate.ticker} ${qtyInt}주 @$${price.toFixed(2)} [ordNo:${data.ordNo||'없음'} trId:${data.trId||''}]`);
-        if (!data.ordNo) addLog('warn', `⚠️ ${candidate.ticker} 매수 ordNo 없음 — KIS 접수 여부 HTS에서 확인 필요`);
+        if (data.odnoMissing) addLog('warn', `⚠️ ${candidate.ticker} 매수 ordNo 없음 — KIS 야간/시간외 접수 케이스. HTS에서 확인 필요`);
         // 🔍 3초 후 체결 확인 (비동기 — 메인 흐름 블록 안 함)
         if (data.ordNo) {
           const _ordNo = data.ordNo, _ticker = candidate.ticker;
@@ -3018,11 +3023,19 @@ async function executeEntry(candidate) {
         const data = await res.json();
         if (data.serverBlocked) { addLog('warn', `⚠️ 국내 매수 서버 차단: ${candidate.ticker} — ${data.error || '네트워크 오류'}`); return; }
         if (!data.ok) {
+          const errMsg = data.error || JSON.stringify(data);
           const hint   = data.hint   ? ` → ${data.hint}`   : '';
           const rtCd   = data.rtCd   ? ` [rt_cd:${data.rtCd}]` : '';
           const trInfo = data.trId   ? ` [trId:${data.trId}]`  : '';
-          throw new Error((data.error || JSON.stringify(data)) + rtCd + trInfo + hint);
+          // "주문수량이 가능수량보다 큽니다" = 잔고 부족 → 친절한 메시지로 개선 (포지션 추가 안 함 — throw 유지)
+          if (errMsg.includes('가능수량') || errMsg.includes('주문수량')) {
+            throw new Error(`❌ 국내 매수 거부 — 잔고 부족 (주문수량 > 가능수량). 투자금액 설정을 낮추거나 잔고를 확인하세요${rtCd}${trInfo}`);
+          }
+          throw new Error(errMsg + rtCd + trInfo + hint);
         }
+        // ✅ ordNo 로깅 — 실제 주문번호 확인용 (없어도 rt_cd=0이면 접수된 것으로 처리)
+        addLog('info', `📥 국내 매수접수: ${candidate.ticker} ${qtyInt}주 @${fmtPrice(price)}원 [ordNo:${data.ordNo||'없음'} trId:${data.trId||''}]`);
+        if (data.odnoMissing) addLog('warn', `⚠️ ${candidate.ticker} 매수 ordNo 없음 — KIS 야간/시간외 접수 케이스. HTS에서 확인 필요`);
         // 🔍 3초 후 체결 확인 (비동기)
         if (data.ordNo) {
           const _ordNo = data.ordNo, _ticker = candidate.ticker;
