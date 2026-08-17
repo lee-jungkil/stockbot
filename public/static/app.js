@@ -2173,14 +2173,12 @@ async function executeExit(pos, reason, netPnlPct, exitType, slippagePct) {
           const detail = data.trId ? ` [trId:${data.trId} excd:${data.exchCd} hhmm:${data.hhmm}]` : '';
           throw new Error((data.error || JSON.stringify(data)) + detail);
         }
-        // ✅ ordNo(주문번호) 필수 검증 — 없으면 KIS 실제 주문 미접수로 간주
-        if (!data.ordNo || data.ordNo.trim() === '') {
-          const detail = data.trId ? ` [trId:${data.trId} hhmm:${data.hhmm} raw:${JSON.stringify(data).slice(0,150)}]` : '';
-          throw new Error(`KIS 주문번호(odno) 없음 — 실제 주문 미제출` + detail);
+        // ✅ ordNo 없어도 ok:true면 매도 접수 성공으로 처리 (KIS 야간/시간외 odno 미반환 케이스)
+        if (data.odnoMissing) {
+          addLog('warn', `⚠️ ${pos.ticker} 미국 매도 ordNo 없음 — 매도 접수 성공 간주, KIS HTS에서 확인 필요`);
+        } else {
+          addLog('info', `📤 미국 매도접수: ${pos.ticker} ${pos.qty}주 @$${actualExitPrice.toFixed(2)} (지정가) [ordNo:${data.ordNo} trId:${data.trId}]`);
         }
-        // ✅ 미국 매도 접수 성공 — 지정가(현재가-0.5%) 즉시체결 방식
-        addLog('info', `📤 미국 매도접수: ${pos.ticker} ${pos.qty}주 @$${actualExitPrice.toFixed(2)} (지정가) [ordNo:${data.ordNo} trId:${data.trId}]`);
-        // 🔍 3초 후 체결 확인 (비동기 — 메인 흐름 블록 안 함)
         if (data.ordNo) {
           const _ordNo = data.ordNo, _ticker = pos.ticker;
           setTimeout(() => checkFillStatus('US', _ordNo, _ticker, 'sell'), 3000);
@@ -2204,13 +2202,12 @@ async function executeExit(pos, reason, netPnlPct, exitType, slippagePct) {
           const trInfo = data.trId   ? ` [trId:${data.trId}]`  : '';
           throw new Error((data.error || JSON.stringify(data)) + rtCd + trInfo + hint);
         }
-        // ✅ ordNo(주문번호) 필수 검증 — 없으면 KIS 실제 주문 미접수로 간주
-        if (!data.ordNo || data.ordNo.trim() === '') {
-          throw new Error(`KIS 국내 주문번호(odno) 없음 — 실제 주문 미제출 [raw:${JSON.stringify(data).slice(0,150)}]`);
+        // ✅ ordNo 없어도 ok:true면 매도 접수 성공으로 처리 (KIS 야간/시간외 odno 미반환 케이스)
+        if (data.odnoMissing) {
+          addLog('warn', `⚠️ ${pos.ticker} 국내 매도 ordNo 없음 — 매도 접수 성공 간주, KIS HTS에서 확인 필요`);
+        } else {
+          addLog('info', `📤 국내 매도접수: ${pos.ticker} ${pos.qty}주 (시장가) [ordNo:${data.ordNo} trId:TTTC0801U]`);
         }
-        // ✅ 국내 매도 접수 성공 — 시장가(ORD_DVSN=01) 즉시체결
-        addLog('info', `📤 국내 매도접수: ${pos.ticker} ${pos.qty}주 (시장가) [ordNo:${data.ordNo} trId:TTTC0801U]`);
-        // 🔍 3초 후 체결 확인 (비동기)
         if (data.ordNo) {
           const _ordNo = data.ordNo, _ticker = pos.ticker;
           setTimeout(() => checkFillStatus('KR', _ordNo, _ticker, 'sell'), 3000);

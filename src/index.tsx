@@ -386,14 +386,9 @@ app.post('/api/kis/order', async (c) => {
         return c.json({ error: errMsg, rtCd, hint, trId, ticker }, 400)
       }
       const odno = data.output?.odno
-      // 매도는 odno 필수 검증 (없으면 실제 주문 미접수), 매수는 rt_cd=0이면 접수된 것으로 처리
-      if (side === 'sell' && (!odno || odno.trim() === '')) {
-        return c.json({
-          error: `KIS 국내 매도 주문번호 없음 (rt_cd=0이지만 odno 미반환) [trId:${trId}]`,
-          raw: JSON.stringify(data).slice(0, 300), trId, ticker,
-        }, 400)
-      }
-      return c.json({ ok: true, ordNo: odno || '', trId })
+      // rt_cd=0 이면 odno 없어도 매도 접수된 것으로 처리 (KIS 야간/시간외 주문은 odno 미반환 케이스 있음)
+      // odno 없으면 ordNo='' 로 반환하되 ok:true — 클라이언트에서 경고 로그만 남김
+      return c.json({ ok: true, ordNo: odno || '', trId, odnoMissing: !odno })
     } catch (e: any) {
       const msg = e?.message || '주문 실패'
       const isNetwork = msg.includes('fetch') || msg.includes('connect') || msg.includes('timeout') || msg.includes('network')
@@ -731,14 +726,9 @@ app.post('/api/kis/us/order', async (c) => {
         return c.json({ error: errMsg, trId, exchCd, hhmm, isPremarket, rt_cd: data.rt_cd }, 400)
       }
       const odno = data.output?.odno
-      // 매도는 odno 필수 검증 (없으면 실제 주문 미접수), 매수는 rt_cd=0이면 접수된 것으로 처리
-      if (side === 'sell' && (!odno || odno.trim() === '')) {
-        return c.json({
-          error: `KIS 미국 매도 주문번호 없음 (rt_cd=0이지만 odno 미반환) [trId:${trId}]`,
-          raw: JSON.stringify(data).slice(0, 300), trId, exchCd, hhmm, isPremarket,
-        }, 400)
-      }
-      return c.json({ ok: true, ordNo: odno || '', trId, exchCd, hhmm, isPremarket })
+      // rt_cd=0 이면 odno 없어도 매도 접수된 것으로 처리 (KIS 야간/시간외 주문은 odno 미반환 케이스 있음)
+      // odno 없으면 ordNo='' 로 반환하되 ok:true — 클라이언트에서 경고 로그만 남김
+      return c.json({ ok: true, ordNo: odno || '', trId, exchCd, hhmm, isPremarket, odnoMissing: !odno })
     } catch (e: any) {
       return c.json({ error: e?.message || '미국주식 주문 실패', serverBlocked: true }, 503)
     }
