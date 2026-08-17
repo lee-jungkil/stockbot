@@ -2170,11 +2170,16 @@ async function executeExit(pos, reason, netPnlPct, exitType, slippagePct) {
           return false;
         }
         if (!data.ok) {
-          const detail = data.trId ? ` [trId:${data.trId} excd:${data.exchCd} hhmm:${data.hhmm}]` : '';
-          throw new Error((data.error || JSON.stringify(data)) + detail);
-        }
-        // ✅ ordNo 없어도 ok:true면 매도 접수 성공으로 처리 (KIS 야간/시간외 odno 미반환 케이스)
-        if (data.odnoMissing) {
+          const errMsg = data.error || JSON.stringify(data);
+          // "주문수량이 가능수량보다 큽니다" = KIS에 이미 매도 접수됨 → 포지션 강제 제거
+          if (errMsg.includes('가능수량') || errMsg.includes('주문수량')) {
+            addLog('warn', `⚠️ ${pos.ticker} 미국 매도 — KIS 이미 접수된 것으로 간주 (가능수량 초과) → 포지션 제거`);
+            // throw 없이 아래 성공 로직으로 넘어가게 처리
+          } else {
+            const detail = data.trId ? ` [trId:${data.trId} excd:${data.exchCd} hhmm:${data.hhmm}]` : '';
+            throw new Error(errMsg + detail);
+          }
+        } else if (data.odnoMissing) {
           addLog('warn', `⚠️ ${pos.ticker} 미국 매도 ordNo 없음 — 매도 접수 성공 간주, KIS HTS에서 확인 필요`);
         } else {
           addLog('info', `📤 미국 매도접수: ${pos.ticker} ${pos.qty}주 @$${actualExitPrice.toFixed(2)} (지정가) [ordNo:${data.ordNo} trId:${data.trId}]`);
@@ -2197,13 +2202,17 @@ async function executeExit(pos, reason, netPnlPct, exitType, slippagePct) {
         const data = await res.json();
         if (data.serverBlocked) { addLog('warn', `⚠️ 국내 매도 서버 차단: ${pos.ticker} — ${data.error||'네트워크 오류'} — 포지션 유지`); return false; }
         if (!data.ok) {
-          const hint   = data.hint   ? ` → ${data.hint}`   : '';
-          const rtCd   = data.rtCd   ? ` [rt_cd:${data.rtCd}]` : '';
-          const trInfo = data.trId   ? ` [trId:${data.trId}]`  : '';
-          throw new Error((data.error || JSON.stringify(data)) + rtCd + trInfo + hint);
-        }
-        // ✅ ordNo 없어도 ok:true면 매도 접수 성공으로 처리 (KIS 야간/시간외 odno 미반환 케이스)
-        if (data.odnoMissing) {
+          const errMsg = data.error || JSON.stringify(data);
+          // "주문수량이 가능수량보다 큽니다" = KIS에 이미 매도 접수됨 → 포지션 강제 제거
+          if (errMsg.includes('가능수량') || errMsg.includes('주문수량')) {
+            addLog('warn', `⚠️ ${pos.ticker} 국내 매도 — KIS 이미 접수된 것으로 간주 (가능수량 초과) → 포지션 제거`);
+          } else {
+            const hint   = data.hint   ? ` → ${data.hint}`   : '';
+            const rtCd   = data.rtCd   ? ` [rt_cd:${data.rtCd}]` : '';
+            const trInfo = data.trId   ? ` [trId:${data.trId}]`  : '';
+            throw new Error(errMsg + rtCd + trInfo + hint);
+          }
+        } else if (data.odnoMissing) {
           addLog('warn', `⚠️ ${pos.ticker} 국내 매도 ordNo 없음 — 매도 접수 성공 간주, KIS HTS에서 확인 필요`);
         } else {
           addLog('info', `📤 국내 매도접수: ${pos.ticker} ${pos.qty}주 (시장가) [ordNo:${data.ordNo} trId:TTTC0801U]`);
