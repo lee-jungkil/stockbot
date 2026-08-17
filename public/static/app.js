@@ -284,6 +284,7 @@ const STATE = {
   market: 'KR',           // 'KR'=국내 | 'US'=미국 | 'BOTH'=국내+미국 동시
   strategy: 'scalping',
   positions: [],           // [{ticker, name, entryPrice, qty, entryTime, currentPrice, pnlPct, market}]
+  _pendingTickers: new Set(), // 주문 진행 중 ticker 잠금 (중복 매수 방지)
   stats: { totalTrades: 0, winTrades: 0, totalProfit: 0, dailyProfit: 0 },
   config: {
     maxPositions: 3,
@@ -2350,6 +2351,7 @@ async function scanForEntries() {
   for (const c of candidates) {
     if (STATE.positions.length >= STATE.config.maxPositions) break;
     if (STATE.positions.find(p => p.ticker === c.ticker)) continue;
+    if (STATE._pendingTickers.has(c.ticker)) continue; // 주문 진행 중 중복 방지
     // KIS Rate Limit: 주문 간 1.2초 딜레이 (초당 거래건수 초과 방지)
     if (orderCount > 0) await new Promise(r => setTimeout(r, 1200));
     await executeEntry(c);
@@ -2885,6 +2887,19 @@ async function checkFillStatus(market, ordNo, ticker, side = 'buy') {
 async function executeEntry(candidate) {
   const isUs = candidate.market === 'US';
 
+  // ── 중복 주문 방지: 이미 진행 중인 ticker 즉시 차단 ──
+  if (STATE._pendingTickers.has(candidate.ticker)) {
+    addLog('warn', `⚠️ 중복 주문 차단: ${candidate.ticker} — 이미 주문 진행 중`);
+    return;
+  }
+  // KIS 실제 보유 포지션 중복 체크 (loadPositions로 불러온 포지션 포함)
+  if (STATE.positions.find(p => p.ticker === candidate.ticker)) {
+    addLog('warn', `⚠️ 중복 주문 차단: ${candidate.ticker} — 이미 보유 중`);
+    return;
+  }
+  STATE._pendingTickers.add(candidate.ticker); // 잠금
+
+  try {
   // ── 가용 자금 조회 ─────────────────────────────────────
   let available;
   if (STATE.mode === 'paper') {
@@ -3071,6 +3086,9 @@ async function executeEntry(candidate) {
         STATE.liveBalanceTs = Date.now();
       }
     }, 8000);
+  }
+  } finally {
+    STATE._pendingTickers.delete(candidate.ticker); // 잠금 해제 (성공/실패 무관)
   }
 }
 
