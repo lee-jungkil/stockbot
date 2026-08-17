@@ -1962,12 +1962,15 @@ async function checkPositionsForExit() {
         const modeTag = STATE.mode === 'paper' ? '[페이퍼]' : '[실전]';
         addLog('warn', `⏸️ ${modeTag} ${pos.name}(${pos.ticker}) — ${reason}: 매도 차단 (정규장 22:30 재개 시 자동 재개)`);
       }
-      // 가격만 갱신 (PnL 추적용)
+      // 가격만 갱신 (PnL 추적용) — 장외시간에는 peakPnl을 0 이상으로만 유지
       const price = await fetchCurrentPrice(pos.ticker);
       if (price) {
         pos.currentPrice = price;
         pos.pnlPct = ((price - pos.entryPrice) / pos.entryPrice) * 100;
-        if (pos.pnlPct > (pos.peakPnl || 0)) pos.peakPnl = pos.pnlPct;
+        // ⚠️ 장외시간 peakPnl은 양수일 때만 갱신 — 음수 오염 방지
+        if (pos.pnlPct > 0 && pos.pnlPct > (pos.peakPnl || 0)) pos.peakPnl = pos.pnlPct;
+        // 기존에 음수로 오염된 peakPnl 복구
+        if ((pos.peakPnl || 0) < 0) pos.peakPnl = 0;
       }
       continue; // 매도 판단 전체 스킵
     }
@@ -1981,7 +1984,8 @@ async function checkPositionsForExit() {
     const pnlPct    = ((currentPrice - pos.entryPrice) / pos.entryPrice) * 100;
     pos.pnlPct      = pnlPct;
 
-    // 고점 갱신
+    // 고점 갱신 (peakPnl은 항상 0 이상 — 음수 오염 방지)
+    if ((pos.peakPnl || 0) < 0) pos.peakPnl = 0; // 음수 복구
     if (pnlPct > (pos.peakPnl || 0)) pos.peakPnl = pnlPct;
 
     const holdSec   = (Date.now() - pos.entryTime) / 1000;
@@ -2080,7 +2084,8 @@ async function checkPositionsForExit() {
         addLog('scan', `   🔒 트레일 발동${preTag}: ${pos.name} 고점 ${pos.peakPnl.toFixed(2)}% (기준 ${(target * activeEp.trailTriggerMult).toFixed(2)}% 돌파)`);
       }
       // 고점에서 activeEp.trailDropPct 이상 하락 시 청산
-      const dropFromPeak = pos.peakPnl - pnlPct;
+      // ⚠️ peakPnl이 음수로 오염된 경우 dropFromPeak가 음수가 되어 트레일 불발 → Max(0) 보정
+      const dropFromPeak = Math.max(0, pos.peakPnl) - pnlPct;
       if (dropFromPeak >= activeEp.trailDropPct) {
         const preTag = isPreCloseMode ? ' [마감청산]' : '';
         exitReason = `트레일 청산${preTag} | 고점 +${pos.peakPnl.toFixed(2)}% → 현재 +${pnlPct.toFixed(2)}% (${dropFromPeak.toFixed(2)}%p 하락)`;
@@ -2093,9 +2098,10 @@ async function checkPositionsForExit() {
     // → 위 2번 조건에서 trailArmed가 설정됨
 
     // ── 4) 시간 청산 ────────────────────────────────────────────
-    // 마감 준비 구간: maxHoldSec=0 → 이익 있으면 즉시 수익 확정
-    //               손실 중이면 손절이 우선 처리됨 (1번)
-    else if (holdSec >= activeEp.maxHoldSec) {
+    // ✅ else if 체인 밖으로 독립 — 트레일 발동 중에도 시간청산 적용
+    // (trailArmed 중에도 maxHoldSec 초과 시 청산해야 장기 표류 방지)
+    // 단, 이미 다른 exitReason이 설정된 경우엔 패스
+    if (!exitReason && holdSec >= activeEp.maxHoldSec) {
       if (pnlPct > activeEp.timeExitMinPnl) {
         const preTag = isPreCloseMode ? ' [마감준비]' : '';
         exitReason = `시간청산${preTag} (${Math.round(holdSec/60)}분) +${pnlPct.toFixed(2)}%`;
@@ -3423,7 +3429,7 @@ function renderPositions() {
     const pnlAmtRaw = pos.entryPrice * pos.qty * netPnl / 100;
     const pnlAmt    = isUs ? Math.round(pnlAmtRaw * (STATE.usdKrw || 1380)) : Math.round(pnlAmtRaw);
     const bar       = Math.min(Math.abs(pos.pnlPct) / STATE.config.profitTarget * 100, 100);
-    const peakPnl   = pos.peakPnl || 0;
+    const peakPnl   = Math.max(0, pos.peakPnl || 0); // 항상 0 이상 보정
     const dropFromPeak = peakPnl - pos.pnlPct;
 
     // 트레일 상태 배지
