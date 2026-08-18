@@ -282,6 +282,7 @@ const STATE = {
   running: false,
   mode: 'paper',           // 'paper' | 'live'
   market: 'KR',           // 'KR'=국내 | 'US'=미국 | 'BOTH'=국내+미국 동시
+  krExchange: 'BOTH',     // 국내 거래소 필터: 'KOSPI' | 'KOSDAQ' | 'BOTH'
   strategy: 'scalping',
   positions: [],           // [{ticker, name, entryPrice, qty, entryTime, currentPrice, pnlPct, market}]
   _pendingTickers: new Set(), // 주문 진행 중 ticker 잠금 (중복 매수 방지)
@@ -839,9 +840,14 @@ function setMarket(market) {
     if (el) el.classList.toggle('active-market', m === market);
   });
 
+  // 코스피/코스닥 선택 패널 — KR 모드일 때만 표시
+  const krExPanel = document.getElementById('kr-exchange-panel');
+  if (krExPanel) krExPanel.classList.toggle('hidden', market !== 'KR');
+
   // 시장별 안내 로그
   if (market === 'KR') {
-    addLog('info', '🇰🇷 국내주식 모드 — 코스피/코스닥 정규장 (09:00~15:30)');
+    const exName = { KOSPI: '코스피', KOSDAQ: '코스닥', BOTH: '코스피+코스닥' }[STATE.krExchange] || '코스피+코스닥';
+    addLog('info', `🇰🇷 국내주식 모드 — ${exName} 정규장 (09:00~15:30)`);
     // 미국 잔고 캐시 초기화
     STATE.liveBalanceUsd = 0;
     STATE.liveBalanceUsdTs = 0;
@@ -879,6 +885,21 @@ function setMarket(market) {
 
   updateMarketStatus();
   updateStatsUI();
+}
+
+// ─── 국내 거래소 선택 (코스피 / 코스닥 / 둘다) ────────────────
+function setKrExchange(ex) {
+  STATE.krExchange = ex; // 'KOSPI' | 'KOSDAQ' | 'BOTH'
+  localStorage.setItem('bot_kr_exchange', ex);
+
+  // 버튼 활성 상태 업데이트
+  ['KOSPI', 'KOSDAQ', 'BOTH'].forEach(e => {
+    const el = document.getElementById('krex-' + e);
+    if (el) el.classList.toggle('active-market', e === ex);
+  });
+
+  const exName = { KOSPI: '코스피만', KOSDAQ: '코스닥만', BOTH: '코스피+코스닥' }[ex] || ex;
+  addLog('info', `🇰🇷 국내 거래소 변경: ${exName}`);
 }
 
 function triggerUsdBalanceFetch() {
@@ -1164,6 +1185,17 @@ function loadConfig() {
   // 환율 패널 표시 여부
   const fxPanel = document.getElementById('fx-panel');
   if (fxPanel) fxPanel.classList.toggle('hidden', savedMarket === 'KR');
+
+  // krExchange 복원 (코스피/코스닥/둘다)
+  const savedKrEx = localStorage.getItem('bot_kr_exchange') || 'BOTH';
+  STATE.krExchange = savedKrEx;
+  ['KOSPI','KOSDAQ','BOTH'].forEach(ex => {
+    const el = document.getElementById('krex-' + ex);
+    if (el) el.classList.toggle('active-market', ex === savedKrEx);
+  });
+  // KR 모드 아닐 때 패널 숨김
+  const krExPanel = document.getElementById('kr-exchange-panel');
+  if (krExPanel) krExPanel.classList.toggle('hidden', savedMarket !== 'KR');
 
   const p  = STATE.config.profitTarget;
   const sl = STATE.config.stopLoss;
@@ -2377,14 +2409,21 @@ async function generateKrCandidates() {
   const ap = (ADAPTIVE_PARAMS[strategy] || ADAPTIVE_PARAMS.scalping)[STATE.adaptiveMode];
 
   // ── Step 1: 거래량 순위 조회 (KOSPI + KOSDAQ 병렬) ──────────────
+  // krExchange 설정에 따라 조회 대상 결정
+  const krEx = STATE.krExchange || 'BOTH';
+  const fetchKospi  = krEx === 'KOSPI'  || krEx === 'BOTH';
+  const fetchKosdaq = krEx === 'KOSDAQ' || krEx === 'BOTH';
   let rankStocks = [];
   try {
-    const [kospiRes, kosdaqRes] = await Promise.allSettled([
-      axios.get('/api/naver/volume-rank?market=KOSPI&top=30',  { timeout: 10000 }),
-      axios.get('/api/naver/volume-rank?market=KOSDAQ&top=30', { timeout: 10000 }),
-    ]);
-    const kospiList  = kospiRes.status  === 'fulfilled' ? (kospiRes.value.data?.stocks  || []) : [];
-    const kosdaqList = kosdaqRes.status === 'fulfilled' ? (kosdaqRes.value.data?.stocks || []) : [];
+    const requests = [];
+    if (fetchKospi)  requests.push(axios.get('/api/naver/volume-rank?market=KOSPI&top=30',  { timeout: 10000 }));
+    if (fetchKosdaq) requests.push(axios.get('/api/naver/volume-rank?market=KOSDAQ&top=30', { timeout: 10000 }));
+    const results = await Promise.allSettled(requests);
+
+    let idx = 0;
+    const kospiList  = fetchKospi  ? (results[idx++]?.value?.data?.stocks  || []) : [];
+    const kosdaqList = fetchKosdaq ? (results[idx++]?.value?.data?.stocks  || []) : [];
+
     if (kospiList.length === 0 && kosdaqList.length === 0) {
       addLog('warn', '⚠️ 거래량 순위 조회 실패 — 시뮬레이션 사용');
       return generateSimCandidates(strategy);
@@ -2394,7 +2433,8 @@ async function generateKrCandidates() {
     for (const s of [...kospiList, ...kosdaqList]) {
       if (!seen.has(s.code)) { seen.add(s.code); rankStocks.push(s); }
     }
-    addLog('scan', `   🇰🇷 거래량 순위: KOSPI ${kospiList.length}개 + KOSDAQ ${kosdaqList.length}개 → 병합 ${rankStocks.length}개`);
+    const exLabel = krEx === 'KOSPI' ? 'KOSPI' : krEx === 'KOSDAQ' ? 'KOSDAQ' : 'KOSPI+KOSDAQ';
+    addLog('scan', `   🇰🇷 거래량 순위 [${exLabel}]: KOSPI ${kospiList.length}개 + KOSDAQ ${kosdaqList.length}개 → 병합 ${rankStocks.length}개`);
   } catch(e) {
     addLog('warn', '⚠️ 거래량 순위 조회 실패 — 시뮬레이션 사용');
     return generateSimCandidates(strategy);
@@ -4224,16 +4264,22 @@ async function lookupStock() {
 
 async function loadVolumeRank() {
   const el = document.getElementById('scanner-result');
-  el.innerHTML = '<div class="col-span-full text-gray-500 text-sm text-center py-4">🔄 거래량 상위 조회 중 (KOSPI+KOSDAQ)...</div>';
+  const krEx = STATE.krExchange || 'BOTH';
+  const fetchKospi  = krEx === 'KOSPI'  || krEx === 'BOTH';
+  const fetchKosdaq = krEx === 'KOSDAQ' || krEx === 'BOTH';
+  const exLabel = krEx === 'KOSPI' ? 'KOSPI' : krEx === 'KOSDAQ' ? 'KOSDAQ' : 'KOSPI+KOSDAQ';
+  el.innerHTML = `<div class="col-span-full text-gray-500 text-sm text-center py-4">🔄 거래량 상위 조회 중 (${exLabel})...</div>`;
 
-  // KOSPI + KOSDAQ 병렬 조회
+  // krExchange 설정에 따라 조회 대상 결정
   try {
-    const [kospiRes, kosdaqRes] = await Promise.allSettled([
-      axios.get('/api/naver/volume-rank?market=KOSPI&top=20',  { timeout: 10000 }),
-      axios.get('/api/naver/volume-rank?market=KOSDAQ&top=20', { timeout: 10000 }),
-    ]);
-    const kospiList  = kospiRes.status  === 'fulfilled' ? (kospiRes.value.data?.stocks  || []) : [];
-    const kosdaqList = kosdaqRes.status === 'fulfilled' ? (kosdaqRes.value.data?.stocks || []) : [];
+    const requests = [];
+    if (fetchKospi)  requests.push(axios.get('/api/naver/volume-rank?market=KOSPI&top=20',  { timeout: 10000 }));
+    if (fetchKosdaq) requests.push(axios.get('/api/naver/volume-rank?market=KOSDAQ&top=20', { timeout: 10000 }));
+    const results = await Promise.allSettled(requests);
+
+    let idx = 0;
+    const kospiList  = fetchKospi  ? (results[idx++]?.value?.data?.stocks  || []) : [];
+    const kosdaqList = fetchKosdaq ? (results[idx++]?.value?.data?.stocks  || []) : [];
     // 중복 제거 후 병합, 거래량 기준 정렬 → 상위 12개
     const seen = new Set();
     const merged = [];

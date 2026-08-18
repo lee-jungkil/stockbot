@@ -1315,6 +1315,24 @@ app.get('/', (c) => {
             🇺🇸 미국
           </button>
         </div>
+        <!-- 코스피/코스닥 선택 패널 (KR 모드일 때만 표시) -->
+        <div id="kr-exchange-panel" class="mt-2">
+          <label class="text-xs text-gray-500 mb-1.5 block">거래소 선택</label>
+          <div class="grid grid-cols-3 gap-1">
+            <button id="krex-KOSPI" onclick="setKrExchange('KOSPI')"
+              class="market-btn py-1.5 rounded text-xs font-medium transition">
+              🔵 코스피
+            </button>
+            <button id="krex-BOTH" onclick="setKrExchange('BOTH')"
+              class="market-btn active-market py-1.5 rounded text-xs font-medium transition">
+              📊 둘다
+            </button>
+            <button id="krex-KOSDAQ" onclick="setKrExchange('KOSDAQ')"
+              class="market-btn py-1.5 rounded text-xs font-medium transition">
+              🟣 코스닥
+            </button>
+          </div>
+        </div>
         <!-- 환율 패널 (미국/BOTH 모드일 때만 표시) -->
         <div id="fx-panel" class="hidden mt-2 flex items-center justify-between bg-gray-800/60 rounded px-2.5 py-1.5">
           <span class="text-xs text-gray-400">💱 환율</span>
