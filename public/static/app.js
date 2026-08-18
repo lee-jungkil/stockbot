@@ -2469,10 +2469,13 @@ async function generateKrCandidates() {
 
   addLog('scan', `   🇰🇷 일봉 RSI/MACD 계산: ${withCandle}개 성공, ${withoutCandle}개 실패`);
 
-  // ── Step 5: 점수 내림차순 정렬 → 상위 5개 반환 ──────────────────
+  // ── Step 5: 점수 내림차순 정렬 → 상위 N개 반환 (maxPositions 연동) ──────────────────
+  // 슬롯 여유 = maxPositions - 현재 보유 수 (최소 3, 최대 10)
+  const slotsLeft = Math.max(3, STATE.config.maxPositions - STATE.positions.length);
+  const topN = Math.min(slotsLeft, scored.length);
   if (scored.length > 0) {
     scored.sort((a, b) => b.score - a.score);
-    const top5 = scored.slice(0, 5);
+    const top5 = scored.slice(0, topN);
     const topStr = top5.slice(0, 3).map(c =>
       `${c.name}(${c.score}점,RSI:${c.rsi?.toFixed(0)||'-'})`
     ).join(', ');
@@ -2482,7 +2485,7 @@ async function generateKrCandidates() {
 
   // 일봉 점수 기반 후보 없음 → 등락률 기반 폴백
   addLog('warn', '⚠️ 일봉 점수 기반 후보 없음 — 등락률 폴백 사용');
-  const fallback = candPool.slice(0, 5).map(item => ({
+  const fallback = candPool.slice(0, slotsLeft).map(item => ({
     ticker:    item.code,
     name:      item.name,
     price:     item.price,
@@ -2688,7 +2691,8 @@ async function generateUsCandidates() {
         const allVols   = valid.map(i => i.volume || 0);
         const avgVol    = allVols.length ? allVols.reduce((a,b)=>a+b,0)/allVols.length : 1;
 
-        const candidates = sorted.slice(0, 5).map(item => {
+        const usSlotsLeft = Math.max(3, STATE.config.maxPositions - STATE.positions.filter(p => p.market === 'US').length);
+        const candidates = sorted.slice(0, usSlotsLeft).map(item => {
           const pct   = item.pctChange || 0;
           const vol   = item.volume || 0;
           let sc = 50; // 기준점
@@ -2804,7 +2808,7 @@ function generateUsSimCandidates(strategy, ap) {
   } else {
     sorted = simulated.sort((a, b) => Math.abs(b.pctChange) - Math.abs(a.pctChange)); // 변동 큰 순
   }
-  return sorted.slice(0, 5);
+  return sorted.slice(0, Math.max(3, STATE.config.maxPositions - STATE.positions.length));
 }
 
 // ─── 체결 확인 (국내: TTTC8001R / 미국: TTTS3035R) ──────────
@@ -2975,6 +2979,21 @@ async function executeEntry(candidate) {
       STATE.liveBalanceKrwForUs = manualKrw;
     }
     available = STATE.liveBalance;
+    if (available <= 0) {
+      // ✅ 잔고가 0이면 KIS 재조회 1회 시도 (장 개시 직후 일시적 0 케이스)
+      addLog('info', `💰 실전 잔고 0 — KIS 재조회 시도 중...`);
+      try {
+        const freshResult = await getLiveBalance();
+        const freshBal = freshResult?.balance ?? freshResult ?? 0;
+        if (freshBal > 0) {
+          STATE.liveBalance         = freshBal;
+          STATE.liveBalanceKrwForUs = freshBal;
+          STATE.liveBalanceTs       = Date.now();
+          available = freshBal;
+          addLog('info', `💰 잔고 재조회 성공: ${fmtPrice(freshBal)}원`);
+        }
+      } catch(e) { /* 무시 */ }
+    }
     if (available <= 0) {
       if (!STATE._balWarnedOnce) {
         STATE._balWarnedOnce = true;
@@ -3194,10 +3213,14 @@ async function tickPositions() {
         getLiveBalance().then(result => {
           const bal = result?.balance ?? result ?? 0;
           const prev = STATE.liveBalance;
-          STATE.liveBalance   = bal;
+          // ✅ bal <= 0이면 저장하지 않음 — 음수/0 잔고 오염 방지
+          // (KIS 매수 직후 ord_psbl_cash가 일시적으로 0/음수 반환하는 경우 무시)
+          if (bal > 0) {
+            STATE.liveBalance   = bal;
+            STATE.liveBalanceKrwForUs = bal; // 통합증거금 자동 동기화
+          }
           STATE.liveBalanceTs = Date.now();
           STATE.liveBalanceFetching = false;
-          if (bal > 0) STATE.liveBalanceKrwForUs = bal; // 통합증거금 자동 동기화
           if (bal > 0 && bal !== prev) { addLog('info', `💰 국내 잔고 갱신: ${fmtPrice(bal)}원`); updateStatsUI(); }
           else updateStatsUI();
         }).catch(() => {
