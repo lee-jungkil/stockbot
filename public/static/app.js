@@ -3001,12 +3001,13 @@ async function executeEntry(candidate) {
         if (data.serverBlocked) { addLog('warn', `⚠️ 미국 매수 서버 차단: ${candidate.ticker}`); return; }
         if (!data.ok) {
           const errMsg = data.error || JSON.stringify(data);
+          const hint   = data.hint   ? ` → ${data.hint}` : '';
           const detail = data.trId ? ` [trId:${data.trId} excd:${data.exchCd} hhmm:${data.hhmm}]` : '';
           // "주문수량이 가능수량보다 큽니다" = 잔고 부족 → 친절한 메시지로 개선 (포지션 추가 안 함 — throw 유지)
           if (errMsg.includes('가능수량') || errMsg.includes('주문수량')) {
             throw new Error(`❌ 미국 매수 거부 — 잔고 부족 (주문수량 > 가능수량). 투자금액 설정을 낮추거나 잔고를 확인하세요${detail}`);
           }
-          throw new Error(errMsg + detail);
+          throw new Error(errMsg + detail + hint);
         }
         // ✅ ordNo 로깅 — 실제 주문번호 확인용 (없어도 rt_cd=0이면 접수된 것으로 처리)
         addLog('info', `📥 미국 매수접수: ${candidate.ticker} ${qtyInt}주 @$${price.toFixed(2)} [ordNo:${data.ordNo||'없음'} trId:${data.trId||''}]`);

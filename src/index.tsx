@@ -368,21 +368,26 @@ app.post('/api/kis/order', async (c) => {
       })
       const data: any = await res.json()
       if (data.rt_cd !== '0') {
-        // rt_cd='1': 토큰 만료 → 캐시 무효화 후 1회 재시도
-        if (data.rt_cd === '1' && !retrying) {
+        const errMsg = data.msg1 || data.msg2 || JSON.stringify(data).slice(0, 200)
+        const rtCd   = data.rt_cd || 'unknown'
+        // ⚠️ "TR ID가 유효하지 않습니다" = TR ID 오류 (모의계좌에 실전 TR ID 사용 등)
+        // → rt_cd=1이라도 토큰 재발급 시도 불필요, 즉시 에러 반환
+        const isTrIdError = errMsg.includes('TR ID') || errMsg.includes('tr_id') || errMsg.includes('TRID')
+        // rt_cd='1' + TR ID 오류 아닌 경우만 토큰 만료로 간주 → 1회 재발급 시도
+        if (data.rt_cd === '1' && !retrying && !isTrIdError) {
           invalidateKisToken(appKey)
           if (c.env.KV) await c.env.KV.delete('kis_token_' + appKey.slice(-8)).catch(() => {})
           return doOrder(true)
         }
-        const errMsg = data.msg1 || data.msg2 || JSON.stringify(data).slice(0, 200)
-        const rtCd   = data.rt_cd || 'unknown'
-        const hint   = rtCd === '1'
-          ? '토큰 만료 — 재발급 실패. 잠시 후 재시도'
-          : errMsg.includes('ACNO') || errMsg.includes('계좌')
-            ? '계좌번호 불일치 — KIS 개발자센터에서 APP KEY와 연결된 계좌번호를 확인하세요'
-            : errMsg.includes('잔고') || errMsg.includes('부족') || errMsg.includes('LIMIT')
-              ? '매수 가능 금액 부족 — 잔고를 확인하세요'
-              : `KIS 응답코드 ${rtCd}`
+        const hint = isTrIdError
+          ? `TR ID 오류 — 모의투자 계좌는 TR ID가 다릅니다 (실전:TTTC0852U / 모의:VTTC0852U). API 설정의 계좌번호가 실전계좌인지 확인하세요`
+          : rtCd === '1'
+            ? '토큰 만료 — 재발급 실패. 봇을 재시작하거나 잠시 후 재시도하세요'
+            : errMsg.includes('ACNO') || errMsg.includes('계좌')
+              ? '계좌번호 불일치 — KIS 개발자센터에서 APP KEY와 연결된 계좌번호를 확인하세요'
+              : errMsg.includes('잔고') || errMsg.includes('부족') || errMsg.includes('LIMIT')
+                ? '매수 가능 금액 부족 — 잔고를 확인하세요'
+                : `KIS 응답코드 ${rtCd}`
         return c.json({ error: errMsg, rtCd, hint, trId, ticker }, 400)
       }
       const odno = data.output?.odno
@@ -716,14 +721,18 @@ app.post('/api/kis/us/order', async (c) => {
       })
       const data: any = await res.json()
       if (data.rt_cd !== '0') {
-        // 토큰 만료 → 캐시 무효화 후 1회 재시도
-        if (data.rt_cd === '1' && !retrying) {
+        const errMsg = data.msg1 || data.msg2 || JSON.stringify(data).slice(0, 200)
+        const isTrIdError = errMsg.includes('TR ID') || errMsg.includes('tr_id') || errMsg.includes('TRID')
+        // 토큰 만료 → 캐시 무효화 후 1회 재시도 (TR ID 오류는 재시도 불필요)
+        if (data.rt_cd === '1' && !retrying && !isTrIdError) {
           invalidateKisToken(appKey)
           if (c.env.KV) await c.env.KV.delete('kis_token_' + appKey.slice(-8)).catch(() => {})
           return doUsOrder(true)
         }
-        const errMsg = data.msg1 || data.msg2 || JSON.stringify(data).slice(0, 200)
-        return c.json({ error: errMsg, trId, exchCd, hhmm, isPremarket, rt_cd: data.rt_cd }, 400)
+        const hint = isTrIdError
+          ? `TR ID 오류 — 모의투자 계좌는 TR ID가 다릅니다 (실전:TTTT1002U/TTTT1006U). API 설정의 계좌번호가 실전계좌인지 확인하세요`
+          : data.rt_cd === '1' ? '토큰 만료 — 재발급 실패. 봇을 재시작하거나 잠시 후 재시도하세요' : undefined
+        return c.json({ error: errMsg, trId, exchCd, hhmm, isPremarket, rt_cd: data.rt_cd, ...(hint ? { hint } : {}) }, 400)
       }
       const odno = data.output?.odno
       // rt_cd=0 이면 odno 없어도 매도 접수된 것으로 처리 (KIS 야간/시간외 주문은 odno 미반환 케이스 있음)
