@@ -349,7 +349,10 @@ app.post('/api/kis/order', async (c) => {
       return c.json({ error: tokErr || '토큰 실패' }, 401)
     }
     const [cano, acntPrdtCd] = accountNo.split('-')
-    const trId = side === 'buy' ? 'TTTC0852U' : 'TTTC0801U'
+    // ✅ KIS API TR ID 신버전 (2025년 이후)
+    // 구버전 TTTC0852U(매수)/TTTC0801U(매도) → 폐기됨
+    // 신버전 TTTC0012U(매수)/TTTC0011U(매도) 사용
+    const trId = side === 'buy' ? 'TTTC0012U' : 'TTTC0011U'
     try {
       const res = await fetch('https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/trading/order-cash', {
         method: 'POST',
@@ -361,7 +364,12 @@ app.post('/api/kis/order', async (c) => {
         },
         body: JSON.stringify({
           CANO: cano, ACNT_PRDT_CD: acntPrdtCd,
-          PDNO: ticker, ORD_DVSN: '01', ORD_QTY: String(qty), ORD_UNPR: '0',
+          PDNO: ticker,
+          ORD_DVSN: '01',       // 시장가
+          ORD_QTY: String(qty),
+          ORD_UNPR: '0',
+          EXCG_ID_DVSN_CD: 'KRX', // ✅ 신버전 필수 필드 추가
+          SLL_TYPE: side === 'sell' ? '01' : '', // 매도유형 (01:일반매도)
         }),
         // @ts-ignore
         signal: AbortSignal.timeout(8000),
@@ -380,7 +388,7 @@ app.post('/api/kis/order', async (c) => {
           return doOrder(true)
         }
         const hint = isTrIdError
-          ? `TR ID 오류 — 모의투자 계좌는 TR ID가 다릅니다 (실전:TTTC0852U / 모의:VTTC0852U). API 설정의 계좌번호가 실전계좌인지 확인하세요`
+          ? `TR ID 오류 — 모의투자 계좌는 TR ID가 다릅니다 (실전:TTTC0012U / 모의:VTTC0012U). API 설정의 계좌번호가 실전계좌인지 확인하세요`
           : rtCd === '1'
             ? '토큰 만료 — 재발급 실패. 봇을 재시작하거나 잠시 후 재시도하세요'
             : errMsg.includes('ACNO') || errMsg.includes('계좌')
@@ -746,7 +754,7 @@ app.post('/api/kis/us/order', async (c) => {
   return doUsOrder()
 })
 
-// ── KIS 프록시: 국내주식 체결 확인 (TTTC8001R)
+// ── KIS 프록시: 국내주식 체결 확인 (TTTC0081R — 신버전)
 app.post('/api/kis/confirm', async (c) => {
   const body = await c.req.json().catch(() => ({})) as any
   const { appKey, appSecret, accountNo, ordNo, ticker, kisToken } = body
@@ -758,13 +766,13 @@ app.post('/api/kis/confirm', async (c) => {
 
   try {
     const [cano, acntPrdtCd] = accountNo.split('-')
-    // TTTC8001R: 주식 주문체결 조회
+    // TTTC0081R: 주식 일별주문체결조회 (신버전 — 구버전 TTTC8001R 폐기)
     const url = `https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/trading/inquire-daily-ccld?CANO=${cano}&ACNT_PRDT_CD=${acntPrdtCd}&INQR_STRT_DT=${new Date(Date.now()+9*3600*1000).toISOString().slice(0,10).replace(/-/g,'')}&INQR_END_DT=${new Date(Date.now()+9*3600*1000).toISOString().slice(0,10).replace(/-/g,'')}&SLL_BUY_DVSN_CD=00&INQR_DVSN=00&PDNO=${ticker||''}&CCLD_DVSN=00&ORD_GNO_BRNO=&ODNO=${ordNo}&INQR_DVSN_3=00&INQR_DVSN_1=&CTX_AREA_FK100=&CTX_AREA_NK100=`
     const res = await fetch(url, {
       headers: {
         authorization: `Bearer ${token}`,
         appkey: appKey, appsecret: appSecret,
-        tr_id: 'TTTC8001R', custtype: 'P',
+        tr_id: 'TTTC0081R', custtype: 'P',
       },
       // @ts-ignore
       signal: AbortSignal.timeout(8000),
