@@ -2843,7 +2843,32 @@ async function checkFillStatus(market, ordNo, ticker, side = 'buy') {
     }
     const filled = data.filled || {};
     const status = filled.status || 'pending';
-    addLog('scan', `   📋 체결확인 [${market}] ${ticker} ordNo:${ordNo} → ${status} (체결:${filled.ccldQty||0}주, 잔여:${filled.remainQty||0}주)`);
+    const ccldQty   = filled.ccldQty   || 0;
+    const ccldPrice = filled.ccldPrice || 0; // 실제 체결단가 (KR: avg_prvs, US: ft_ccld_unpr3)
+    addLog('scan', `   📋 체결확인 [${market}] ${ticker} ordNo:${ordNo} → ${status} (체결:${ccldQty}주, 잔여:${filled.remainQty||0}주${ccldPrice > 0 ? `, 체결단가:${market==='US' ? '$'+ccldPrice.toFixed(2) : fmtPrice(ccldPrice)+'원'}` : ''})`);
+
+    // ✅ 체결가/수량 → pos.entryPrice / pos.qty 갱신 (진입가 괴리 수정)
+    if (side === 'buy' && (status === 'filled' || status === 'partial') && ccldPrice > 0) {
+      const pos = STATE.positions.find(p => p.ticker === ticker && p.market === market);
+      if (pos) {
+        const oldPrice = pos.entryPrice;
+        const oldQty   = pos.qty;
+        pos.entryPrice = ccldPrice;                               // 실제 체결단가로 교체
+        if (ccldQty > 0 && ccldQty !== oldQty) pos.qty = ccldQty; // 실제 체결수량으로 교체
+        pos.pnlPct = pos.currentPrice > 0
+          ? ((pos.currentPrice - pos.entryPrice) / pos.entryPrice) * 100
+          : 0;
+        // peakPnl은 이미 음수 보호 중이므로 pnlPct가 양수일 때만 갱신
+        if (pos.pnlPct > (pos.peakPnl || 0)) pos.peakPnl = pos.pnlPct;
+        savePositions();
+        const priceStr = market === 'US'
+          ? `$${oldPrice.toFixed(2)} → $${ccldPrice.toFixed(2)}`
+          : `${fmtPrice(oldPrice)}원 → ${fmtPrice(ccldPrice)}원`;
+        addLog('info', `🔄 진입가 갱신 [${market}] ${ticker}: ${priceStr} (실제 체결가 반영) PnL: ${pos.pnlPct.toFixed(2)}%`);
+        renderPositions();
+        updateStatsUI();
+      }
+    }
 
     // #5 미체결 처리: pending이면 10초 후 재확인 → 여전히 미체결이면 포지션 제거
     if (status === 'pending' && side === 'buy') {
@@ -2857,9 +2882,29 @@ async function checkFillStatus(market, ordNo, ticker, side = 'buy') {
             signal: AbortSignal.timeout(8000),
           });
           const data2 = await res2.json();
-          const filled2 = data2?.filled || {};
-          const status2 = filled2.status || 'pending';
-          addLog('scan', `   📋 재확인 [${market}] ${ticker} ordNo:${ordNo} → ${status2}`);
+          const filled2   = data2?.filled || {};
+          const status2   = filled2.status   || 'pending';
+          const ccldQty2  = filled2.ccldQty  || 0;
+          const ccldPrice2 = filled2.ccldPrice || 0;
+          addLog('scan', `   📋 재확인 [${market}] ${ticker} ordNo:${ordNo} → ${status2}${ccldPrice2 > 0 ? ` 체결단가:${market==='US' ? '$'+ccldPrice2.toFixed(2) : fmtPrice(ccldPrice2)+'원'}` : ''}`);
+
+          // ✅ 재확인에서도 체결가 갱신
+          if ((status2 === 'filled' || status2 === 'partial') && ccldPrice2 > 0) {
+            const pos = STATE.positions.find(p => p.ticker === ticker && p.market === market);
+            if (pos) {
+              const oldPrice2 = pos.entryPrice;
+              pos.entryPrice = ccldPrice2;
+              if (ccldQty2 > 0 && ccldQty2 !== pos.qty) pos.qty = ccldQty2;
+              pos.pnlPct = pos.currentPrice > 0
+                ? ((pos.currentPrice - pos.entryPrice) / pos.entryPrice) * 100
+                : 0;
+              if (pos.pnlPct > (pos.peakPnl || 0)) pos.peakPnl = pos.pnlPct;
+              savePositions();
+              addLog('info', `🔄 진입가 갱신(재확인) [${market}] ${ticker}: ${market==='US' ? '$'+oldPrice2.toFixed(2)+' → $'+ccldPrice2.toFixed(2) : fmtPrice(oldPrice2)+'원 → '+fmtPrice(ccldPrice2)+'원'} PnL: ${pos.pnlPct.toFixed(2)}%`);
+              renderPositions();
+              updateStatsUI();
+            }
+          }
 
           if (status2 === 'pending') {
             // 여전히 미체결 → 포지션 목록에서 제거 (미체결 매수는 실제로 보유 안 된 것)
@@ -2879,7 +2924,7 @@ async function checkFillStatus(market, ordNo, ticker, side = 'buy') {
               updateStatsUI();
             }
           } else if (status2 === 'filled' || status2 === 'partial') {
-            addLog('info', `✅ 체결 확인 완료 [${market}] ${ticker}: ${status2} (${filled2.ccldQty||0}주)`);
+            addLog('info', `✅ 체결 확인 완료 [${market}] ${ticker}: ${status2} (${ccldQty2}주)`);
           }
         } catch(e2) {
           addLog('warn', `⚠️ 미체결 재확인 오류 [${market}] ${ticker} — ${e2?.message || e2}`);
@@ -2887,7 +2932,7 @@ async function checkFillStatus(market, ordNo, ticker, side = 'buy') {
       }, 10000);
     }
 
-    return { status, ccldQty: filled.ccldQty || 0, remainQty: filled.remainQty || 0 };
+    return { status, ccldQty, ccldPrice, remainQty: filled.remainQty || 0 };
   } catch(e) {
     // 체결확인 API 자체 오류 → 비중요(매도/매수 접수는 이미 성공) → warn만
     addLog('warn', `⚠️ 체결 확인 오류 [${market}] ordNo:${ordNo} — ${e?.message || e}`);
@@ -3667,6 +3712,17 @@ async function syncKisPositions() {
           if (existing) {
             existing.qty          = h.qty;
             existing.currentPrice = h.currentPrice > 0 ? h.currentPrice : existing.currentPrice;
+            // ✅ avgPrice 차이가 있으면 진입가 갱신 (odnoMissing 수정)
+            if (h.avgPrice > 0) {
+              const priceDiff = Math.abs(h.avgPrice - existing.entryPrice) / existing.entryPrice;
+              if (priceDiff > 0.005) {
+                existing.entryPrice = h.avgPrice;
+                existing.pnlPct = existing.currentPrice > 0
+                  ? ((existing.currentPrice - existing.entryPrice) / existing.entryPrice) * 100
+                  : 0;
+                if (existing.pnlPct > (existing.peakPnl || 0)) existing.peakPnl = existing.pnlPct;
+              }
+            }
           }
         }
       }
@@ -3692,9 +3748,28 @@ async function syncKisPositions() {
       if (!h.ticker || h.qty <= 0) continue;
       const existing = STATE.positions.find(p => p.ticker === h.ticker);
       if (existing) {
-        // 기존 포지션 업데이트 (진입가/시간 유지, 수량/현재가 갱신)
+        // 기존 포지션 업데이트 (수량/현재가 갱신)
         existing.qty          = h.qty;
         existing.currentPrice = h.currentPrice > 0 ? h.currentPrice : existing.currentPrice;
+        // ✅ KIS avgPrice가 있고 기존 진입가와 1% 이상 차이나면 → 실제 평균매수가로 교체
+        // (odnoMissing / 직접 주문 케이스에서 스캔가 오염 수정)
+        if (h.avgPrice > 0) {
+          const priceDiff = Math.abs(h.avgPrice - existing.entryPrice) / existing.entryPrice;
+          if (priceDiff > 0.005) { // 0.5% 이상 차이 시 교체 (호가 단위 오차 허용)
+            const oldEntry = existing.entryPrice;
+            existing.entryPrice = h.avgPrice;
+            // PnL 재계산
+            existing.pnlPct = existing.currentPrice > 0
+              ? ((existing.currentPrice - existing.entryPrice) / existing.entryPrice) * 100
+              : 0;
+            if (existing.pnlPct > (existing.peakPnl || 0)) existing.peakPnl = existing.pnlPct;
+            const mkt = existing.market === 'US' ? 'US' : 'KR';
+            const fmt = mkt === 'US'
+              ? `$${oldEntry.toFixed(2)} → $${h.avgPrice.toFixed(2)}`
+              : `${fmtPrice(oldEntry)}원 → ${fmtPrice(h.avgPrice)}원`;
+            addLog('info', `🔄 진입가 갱신(KIS싱크) [${mkt}] ${existing.ticker}: ${fmt} | PnL: ${existing.pnlPct.toFixed(2)}%`);
+          }
+        }
         if (h.pnlPct && h.pnlPct !== 0) existing.pnlPct = h.pnlPct;
         newPositions.push(existing);
       } else {
