@@ -1111,7 +1111,7 @@ function getDefaultState() {
       positionSizeRatio: 0.3,
       profitTarget: 1.5,
       stopLoss: 1.0,
-      scanInterval: 30,
+      scanInterval: 15,
       paperCapital: 5000000,
     },
   }
@@ -1360,7 +1360,7 @@ app.get('/', (c) => {
       <!-- 봇 상태 -->
       <div id="bot-status-area" class="text-xs text-gray-500 space-y-1 pt-2 border-t border-gray-800">
         <div class="flex justify-between"><span>상태</span><span id="bot-running-label" class="text-gray-400">정지</span></div>
-        <div class="flex justify-between"><span>스캔 주기</span><span id="bot-interval-label" class="text-blue-400">30초</span></div>
+        <div class="flex justify-between"><span>스캔 주기</span><span id="bot-interval-label" class="text-blue-400">15초</span></div>
         <div class="flex justify-between"><span>다음 스캔</span><span id="next-scan-label" class="text-gray-400">-</span></div>
         <!-- 적응형 모드 상태 -->
         <div class="flex justify-between items-center pt-1 border-t border-gray-800/50">

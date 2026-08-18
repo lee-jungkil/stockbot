@@ -292,7 +292,7 @@ const STATE = {
     positionSizeRatio: 0.30,
     profitTarget: 1.5,
     stopLoss: 1.0,
-    scanInterval: 30,
+    scanInterval: 15,  // 기본 스캔 주기 15초 (KIS API 허용 범위 내)
     paperCapital: 5000000,
     posMinAmt: 50000,
     posMaxAmt: 150000,
@@ -436,7 +436,9 @@ window.addEventListener('DOMContentLoaded', async () => {
   }
 
   // 주기적 UI 갱신: 포지션 가격 + 총자산 카드
-  setInterval(tickPositions, 5000);
+  // 국내(KR): 3초 / 미국(US): 5초 / BOTH: 3초 — KIS API 허용 범위 내 최대 빈도
+  const tickInterval = (STATE.market === 'US') ? 5000 : 3000;
+  setInterval(tickPositions, tickInterval);
   setInterval(updateMarketStatus, 60000);
   // 총자산 숫자 애니메이션용 1초 갱신
   setInterval(updateStatsUI, 1000);
@@ -2403,6 +2405,25 @@ async function scanForEntries() {
   }
 }
 
+// ─── ETF/ETP 종목 판별 ───────────────────────────────────────
+// 국내 ETF는 종목명에 운용사명 접두어 또는 'ETF','레버리지','인버스' 키워드 포함
+const ETF_KEYWORDS = [
+  'KODEX','TIGER','KBSTAR','HANARO','ARIRANG','KOSEF','KINDEX',
+  'SOL','ACE','RISE','FOCUS','TIMEFOLIO','TREX','MAERICS',
+  'ETF','ETN','레버리지','인버스','인버스2X','곱버스','2X',
+  '선물','채권','국채','금리','달러','원자재','금(현물)','은(현물)',
+];
+/**
+ * 국내 ETF/ETN 여부 판별 (종목명 기준)
+ * @param {string} name - 종목명
+ * @returns {boolean} true = ETF/ETN → 매수 제외
+ */
+function isKrEtf(name) {
+  if (!name) return false;
+  const upper = name.toUpperCase();
+  return ETF_KEYWORDS.some(kw => upper.includes(kw.toUpperCase()));
+}
+
 // ─── 국내주식 후보 종목 스캔 ─────────────────────────────────
 async function generateKrCandidates() {
   const strategy = document.getElementById('strategy-select').value || STATE.strategy;
@@ -2416,8 +2437,8 @@ async function generateKrCandidates() {
   let rankStocks = [];
   try {
     const requests = [];
-    if (fetchKospi)  requests.push(axios.get('/api/naver/volume-rank?market=KOSPI&top=30',  { timeout: 10000 }));
-    if (fetchKosdaq) requests.push(axios.get('/api/naver/volume-rank?market=KOSDAQ&top=30', { timeout: 10000 }));
+    if (fetchKospi)  requests.push(axios.get('/api/naver/volume-rank?market=KOSPI&top=50',  { timeout: 10000 }));
+    if (fetchKosdaq) requests.push(axios.get('/api/naver/volume-rank?market=KOSDAQ&top=50', { timeout: 10000 }));
     const results = await Promise.allSettled(requests);
 
     let idx = 0;
@@ -2442,6 +2463,13 @@ async function generateKrCandidates() {
 
   if (rankStocks.length === 0) return generateSimCandidates(strategy);
 
+  // ── ETF/ETN 제외 필터 ──────────────────────────────────────────
+  const beforeEtf = rankStocks.length;
+  rankStocks = rankStocks.filter(item => !isKrEtf(item.name));
+  const etfRemoved = beforeEtf - rankStocks.length;
+  if (etfRemoved > 0) addLog('scan', `   🚫 ETF/ETN ${etfRemoved}개 제외 → 순수 주식 ${rankStocks.length}개 남음`);
+  if (rankStocks.length === 0) return generateSimCandidates(strategy);
+
   // ── Step 2: 전략별 1차 필터 (등락률 기준) ───────────────────────
   const preFiltered = rankStocks.filter(item => {
     const pct = item.changeRate;
@@ -2455,9 +2483,9 @@ async function generateKrCandidates() {
   // 필터 통과 0개이면 원본 전체 사용 (빈 결과 방지)
   const candPool = preFiltered.length > 0 ? preFiltered : rankStocks;
 
-  // ── Step 3: 일봉 데이터 병렬 조회 (최대 15개, 타임아웃 8초) ──────
+  // ── Step 3: 일봉 데이터 병렬 조회 (최대 20개, 타임아웃 8초) ──────
   // 네이버 fchart API → closes/highs/lows/volumes 추출
-  const TOP_N = Math.min(candPool.length, 15);
+  const TOP_N = Math.min(candPool.length, 20);
   const candleResults = await Promise.allSettled(
     candPool.slice(0, TOP_N).map(async item => {
       try {
@@ -3244,7 +3272,7 @@ async function tickPositions() {
                           (krSessionActive || (!usSessionActive));
     if (shouldFetchKr) {
       const elapsed = Date.now() - STATE.liveBalanceTs;
-      if (!STATE.liveBalanceFetching && elapsed > 30000) {
+      if (!STATE.liveBalanceFetching && elapsed > 20000) { // 국내: 20초마다 잔고 갱신
         STATE.liveBalanceFetching = true;
         if (STATE.liveBalanceTs === 0) {
           const cashEl = document.getElementById('stat-cash');
